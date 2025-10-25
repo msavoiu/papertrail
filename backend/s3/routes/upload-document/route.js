@@ -8,7 +8,7 @@ const s3 = new S3Client({
     region: process.env.AWS_REGION
 });
 
-router.get('/get/:document/:userId', verifyToken, async (req, res) => {
+router.post('/get/:document/:userId', verifyToken, async (req, res) => {
     try {
         const { document, userId }= req.params;
 
@@ -27,7 +27,7 @@ router.get('/get/:document/:userId', verifyToken, async (req, res) => {
         });
         
         // Upload to S3 bucket
-        const result = await s3.send(command);
+        await s3.send(command);
     
         return res.json({ status: 201 }, { path: key, message: "Document uploaded successfully." });
         
