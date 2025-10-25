@@ -8,7 +8,7 @@ const s3 = new S3Client({
     region: process.env.AWS_REGION
 });
 
-router.post('/get/:document/:userId', verifyToken, async (req, res) => {
+router.post('/upload/:document/:userId', verifyToken, async (req, res) => {
     try {
         const { document, userId }= req.params;
 
