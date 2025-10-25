@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -6,15 +8,39 @@ import {
   TouchableOpacity,
   ScrollView,
   SafeAreaView,
+  Image,
+  Alert,
+  ActionSheetIOS,
+  Platform,
+  ActivityIndicator,
 } from 'react-native';
+
+
+// AWS S3 configuration
+const AWS_CONFIG = {
+  bucket: 'your-bucket-name',
+  region: 'us-west-1',
+  // Get presigned URL from your backend
+  getPresignedUrl: async (fileName, fileType) => {
+    // Call your backend API to get presigned URL
+    const response = await fetch('https://your-api.com/get-upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName, fileType }),
+    });
+    return response.json();
+  },
+};
 
 const VaultTab = () => {
   const [documents, setDocuments] = useState({
-    stateId: null,
-    birthCertificate: null,
-    medicalRecords: null,
-    socialSecurity: null,
+    stateId: { front: null, back: null },
+    birthCertificate: { front: null, back: null },
+    medicalRecords: { front: null, back: null },
+    socialSecurity: { front: null, back: null },
   });
+  
+  const [uploading, setUploading] = useState({});
 
   const documentTypes = [
     {
@@ -43,38 +69,256 @@ const VaultTab = () => {
     },
   ];
 
-  const handleUpload = (docId) => {
-    // TODO: Integrate react-native-document-picker
-    console.log('Upload document:', docId);
-    // Simulated upload
-    setDocuments(prev => ({
-      ...prev,
-      [docId]: { name: 'document.pdf', date: new Date() }
-    }));
+  const imagePickerOptions = {
+    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    quality: 0.8,
+    allowsEditing: false,
   };
 
-  const handleView = (docId) => {
-    console.log('View document:', docId);
-    // TODO: Implement document viewer
+  const showUploadOptions = (docId, side) => {
+    const options = ['Cancel', 'Take Photo', 'Choose from Photos', 'Choose PDF'];
+    const cancelButtonIndex = 0;
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex },
+        (buttonIndex) => {
+          if (buttonIndex === 1) openCamera(docId, side);
+          else if (buttonIndex === 2) openLibrary(docId, side);
+          else if (buttonIndex === 3) openDocumentPicker(docId, side);
+        }
+      );
+    } else {
+      Alert.alert(
+        'Upload Document',
+        'Choose an option',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Take Photo', onPress: () => openCamera(docId, side) },
+          { text: 'Choose from Photos', onPress: () => openLibrary(docId, side) },
+          { text: 'Choose PDF', onPress: () => openDocumentPicker(docId, side) },
+        ]
+      );
+    }
   };
 
-  const handleDelete = (docId) => {
-    setDocuments(prev => ({
-      ...prev,
-      [docId]: null
-    }));
+  const openCamera = async (docId, side) => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Camera permission is required');
+      return;
+    }
+    
+    const result = await ImagePicker.launchCameraAsync(imagePickerOptions);
+    handleImageResult(result, docId, side);
+  };
+
+  const openLibrary = async (docId, side) => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Photo library permission is required');
+      return;
+    }
+    
+    const result = await ImagePicker.launchImageLibraryAsync(imagePickerOptions);
+    handleImageResult(result, docId, side);
+  };
+
+  const openDocumentPicker = async (docId, side) => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets[0]) {
+        const file = result.assets[0];
+        handleDocumentResult(file, docId, side);
+      }
+    } catch (err) {
+      Alert.alert('Error', 'Failed to pick document');
+    }
+  };
+
+  const handleImageResult = async (result, docId, side) => {
+    if (result.canceled) return;
+    
+    if (result.assets && result.assets[0]) {
+      const image = result.assets[0];
+      await uploadToS3(image, docId, side, 'image');
+    }
+  };
+
+  const handleDocumentResult = async (file, docId, side) => {
+    await uploadToS3(file, docId, side, 'pdf');
+  };
+
+  const uploadToS3 = async (file, docId, side, fileType) => {
+    const uploadKey = `${docId}-${side}`;
+    setUploading(prev => ({ ...prev, [uploadKey]: true }));
+
+    try {
+      // Step 1: Get presigned URL from your backend
+      const fileName = `${docId}/${side}/${Date.now()}-${file.fileName || file.name || 'document'}`;
+      const mimeType = file.mimeType || file.type || (fileType === 'pdf' ? 'application/pdf' : 'image/jpeg');
+      
+      const { uploadUrl, s3Url } = await AWS_CONFIG.getPresignedUrl(fileName, mimeType);
+
+      // Step 2: Read file and upload to S3
+      const fileUri = file.uri;
+      
+      // For Expo, use fetch with blob
+      const response = await fetch(fileUri);
+      const blob = await response.blob();
+
+      // Step 3: Upload to S3 using presigned URL
+      const uploadResponse = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': mimeType,
+        },
+        body: blob,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error('Upload failed');
+      }
+
+      // Step 4: Save document metadata
+      setDocuments(prev => ({
+        ...prev,
+        [docId]: {
+          ...prev[docId],
+          [side]: {
+            uri: fileType === 'image' ? file.uri : null,
+            s3Url: s3Url,
+            fileName: file.fileName || file.name || 'document',
+            fileType: fileType,
+            mimeType: mimeType,
+            fileSize: file.fileSize || file.size,
+            date: new Date(),
+          }
+        }
+      }));
+
+      Alert.alert('Success', 'Document uploaded successfully');
+    } catch (error) {
+      console.error('Upload error:', error);
+      Alert.alert('Upload Failed', 'Could not upload document. Please try again.');
+    } finally {
+      setUploading(prev => ({ ...prev, [uploadKey]: false }));
+    }
+  };
+
+  const handleDelete = (docId, side) => {
+    Alert.alert(
+      'Remove Document',
+      'Are you sure you want to remove this document?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            // TODO: Call backend to delete from S3
+            setDocuments(prev => ({
+              ...prev,
+              [docId]: {
+                ...prev[docId],
+                [side]: null
+              }
+            }));
+          }
+        }
+      ]
+    );
+  };
+
+  const handleView = (doc) => {
+    if (doc.fileType === 'pdf') {
+      // TODO: Open PDF viewer
+      console.log('Open PDF:', doc.s3Url);
+    } else {
+      // TODO: Open full-screen image viewer
+      console.log('View image:', doc.uri);
+    }
+  };
+
+  const hasAnyDocument = (doc) => {
+    return doc.front || doc.back;
+  };
+
+  const hasBothDocuments = (doc) => {
+    return doc.front && doc.back;
+  };
+
+  const renderDocumentPreview = (doc, docId, side) => {
+    const uploadKey = `${docId}-${side}`;
+    const isUploading = uploading[uploadKey];
+
+    if (isUploading) {
+      return (
+        <View style={styles.uploadingBox}>
+          <ActivityIndicator size="large" color="#2196f3" />
+          <Text style={styles.uploadingText}>Uploading...</Text>
+        </View>
+      );
+    }
+
+    if (!doc) {
+      return (
+        <TouchableOpacity
+          style={styles.uploadBox}
+          onPress={() => showUploadOptions(docId, side)}
+        >
+          <Text style={styles.uploadIcon}>📄</Text>
+          <Text style={styles.uploadText}>Add Document</Text>
+        </TouchableOpacity>
+      );
+    }
+
+    return (
+      <View>
+        <TouchableOpacity onPress={() => handleView(doc)}>
+          {doc.fileType === 'pdf' ? (
+            <View style={styles.pdfPreview}>
+              <Text style={styles.pdfIcon}>📄</Text>
+              <Text style={styles.pdfFileName} numberOfLines={1}>
+                {doc.fileName}
+              </Text>
+            </View>
+          ) : (
+            <Image source={{ uri: doc.uri }} style={styles.photoPreview} />
+          )}
+        </TouchableOpacity>
+        <View style={styles.photoActions}>
+          <TouchableOpacity
+            style={styles.replaceButton}
+            onPress={() => showUploadOptions(docId, side)}
+          >
+            <Text style={styles.replaceButtonText}>Replace</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.removeButton}
+            onPress={() => handleDelete(docId, side)}
+          >
+            <Text style={styles.removeButtonText}>Remove</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Digital Vault</Text>
+        <Text style={styles.headerTitle}>The Vault</Text>
         <Text style={styles.headerSubtitle}>Secure document storage</Text>
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {documentTypes.map((docType) => {
-          const hasDocument = documents[docType.id];
+          const doc = documents[docType.id];
           
           return (
             <View key={docType.id} style={styles.card}>
@@ -84,42 +328,24 @@ const VaultTab = () => {
                   <Text style={styles.cardTitle}>{docType.title}</Text>
                   <Text style={styles.cardDescription}>{docType.description}</Text>
                 </View>
+                {hasBothDocuments(doc) && (
+                  <View style={styles.completeBadge}>
+                    <Text style={styles.completeText}>✓</Text>
+                  </View>
+                )}
               </View>
 
-              {hasDocument ? (
-                <View style={styles.documentInfo}>
-                  <View style={styles.statusBadge}>
-                    <Text style={styles.statusText}>✓ Uploaded</Text>
-                  </View>
-                  <Text style={styles.documentName}>{hasDocument.name}</Text>
-                  <Text style={styles.documentDate}>
-                    Added {hasDocument.date.toLocaleDateString()}
-                  </Text>
-                  
-                  <View style={styles.buttonRow}>
-                    <TouchableOpacity
-                      style={[styles.button, styles.viewButton]}
-                      onPress={() => handleView(docType.id)}
-                    >
-                      <Text style={styles.viewButtonText}>View</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.button, styles.deleteButton]}
-                      onPress={() => handleDelete(docType.id)}
-                    >
-                      <Text style={styles.deleteButtonText}>Remove</Text>
-                    </TouchableOpacity>
-                  </View>
+              <View style={styles.photoSection}>
+                <View style={styles.photoContainer}>
+                  <Text style={styles.photoLabel}>Front</Text>
+                  {renderDocumentPreview(doc.front, docType.id, 'front')}
                 </View>
-              ) : (
-                <TouchableOpacity
-                  style={styles.uploadButton}
-                  onPress={() => handleUpload(docType.id)}
-                >
-                  <Text style={styles.uploadIcon}>📤</Text>
-                  <Text style={styles.uploadText}>Upload Document</Text>
-                </TouchableOpacity>
-              )}
+
+                <View style={styles.photoContainer}>
+                  <Text style={styles.photoLabel}>Back</Text>
+                  {renderDocumentPreview(doc.back, docType.id, 'back')}
+                </View>
+              </View>
             </View>
           );
         })}
@@ -167,7 +393,7 @@ const styles = StyleSheet.create({
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 16,
   },
   icon: {
     fontSize: 40,
@@ -186,78 +412,117 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 2,
   },
-  documentInfo: {
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+  completeBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#4caf50',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  statusBadge: {
-    backgroundColor: '#e8f5e9',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
+  completeText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  photoSection: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  photoContainer: {
+    flex: 1,
+  },
+  photoLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
     marginBottom: 8,
   },
-  statusText: {
-    color: '#2e7d32',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  documentName: {
-    fontSize: 14,
-    color: '#333',
-    fontWeight: '500',
-  },
-  documentDate: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 2,
-    marginBottom: 12,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 10,
+  photoPreview: {
+    width: '100%',
+    height: 120,
     borderRadius: 8,
+    backgroundColor: '#f0f0f0',
+  },
+  pdfPreview: {
+    width: '100%',
+    height: 120,
+    borderRadius: 8,
+    backgroundColor: '#fff3e0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#ffe0b2',
+  },
+  pdfIcon: {
+    fontSize: 40,
+    marginBottom: 4,
+  },
+  pdfFileName: {
+    fontSize: 11,
+    color: '#666',
+    textAlign: 'center',
+    paddingHorizontal: 8,
+  },
+  uploadingBox: {
+    height: 120,
+    borderRadius: 8,
+    backgroundColor: '#f5f5f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadingText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#666',
+  },
+  photoActions: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 8,
+  },
+  replaceButton: {
+    flex: 1,
+    paddingVertical: 8,
+    backgroundColor: '#2196f3',
+    borderRadius: 6,
     alignItems: 'center',
   },
-  viewButton: {
-    backgroundColor: '#2196f3',
-  },
-  viewButtonText: {
+  replaceButtonText: {
     color: '#fff',
+    fontSize: 12,
     fontWeight: '600',
-    fontSize: 14,
   },
-  deleteButton: {
+  removeButton: {
+    flex: 1,
+    paddingVertical: 8,
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: '#e0e0e0',
-  },
-  deleteButtonText: {
-    color: '#666',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  uploadButton: {
-    paddingVertical: 20,
+    borderRadius: 6,
     alignItems: 'center',
+  },
+  removeButtonText: {
+    color: '#666',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  uploadBox: {
+    height: 120,
     borderWidth: 2,
     borderColor: '#e0e0e0',
     borderStyle: 'dashed',
     borderRadius: 8,
-    marginTop: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fafafa',
   },
   uploadIcon: {
     fontSize: 32,
-    marginBottom: 8,
+    marginBottom: 4,
   },
   uploadText: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#2196f3',
     fontWeight: '600',
   },
