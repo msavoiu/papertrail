@@ -13,7 +13,7 @@ const router = express.Router();
 
 router.post('/upload/:document/:userId', async (req, res) => {
     try {
-        const { document, userId }= req.params;
+        const { document, userId } = req.params;
 
         // Change later to read from React Native image upload library
         const fileStream = fs.createReadStream(filePath);
