@@ -15,7 +15,7 @@ router.post('/upload/:document/:userId', verifyToken, async (req, res) => {
         // Change later to read from React Native image upload library
         const fileStream = fs.createReadStream(filePath);
 
-        const key = `user_uploads/${userId}/${document}_{timestamp}.pdf`;
+        const key = `user_uploads/${userId}/${document}.pdf`;
         
         const command = new PutObjectCommand({
             Bucket: process.env.AWS_S3_BUCKET_NAME,
