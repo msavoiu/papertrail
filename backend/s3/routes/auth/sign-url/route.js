@@ -6,9 +6,9 @@ import s3 from "../../../s3Client.js";
 const router = express.Router();
 
 // Secure: require your app auth middleware before this route!
-router.get("/auth/sign-url", async (req, res) => {
+router.get("/auth/sign-url/:key", async (req, res) => {
     try {
-        const { key } = req.query; // e.g. "patients/1234.png"
+        const { key } = req.params; // e.g. "patients/1234.png"
         if (!key) return res.status(400).json({ error: "Missing key" });
 
         // Optional: validate user has access to this object (authz)
