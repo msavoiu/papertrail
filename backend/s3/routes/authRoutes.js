@@ -1,7 +1,10 @@
 import express from "express";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import s3 from "../../../s3Client.js";
+
+const s3 = new S3Client({
+    region: process.env.AWS_REGION
+});
 
 const router = express.Router();
 
@@ -22,6 +25,7 @@ router.get("/auth/sign-url/:key", async (req, res) => {
         // Short expiry for PHI
         const url = await getSignedUrl(s3, cmd, { expiresIn: 120 }); // 120 seconds
         res.json({ url, expiresIn: 120 });
+
     } catch (err) {
         console.error("presign err", err);
         res.status(500).json({ error: "Failed to create presigned URL" });

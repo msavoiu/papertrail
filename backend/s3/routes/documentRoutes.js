@@ -1,3 +1,4 @@
+import express from "express";
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import fs from "fs";
 import dotenv from "dotenv";
@@ -8,7 +9,9 @@ const s3 = new S3Client({
     region: process.env.AWS_REGION
 });
 
-router.post('/upload/:document/:userId', verifyToken, async (req, res) => {
+const router = express.Router();
+
+router.post('/upload/:document/:userId', async (req, res) => {
     try {
         const { document, userId }= req.params;
 
@@ -37,7 +40,7 @@ router.post('/upload/:document/:userId', verifyToken, async (req, res) => {
     }
 });
 
-router.get('/get/:document/:userId', verifyToken, async (req, res) => {
+router.get('/get/:document/:userId', async (req, res) => {
     try {
         const { document, userId } = req.params;
 
@@ -55,7 +58,7 @@ router.get('/get/:document/:userId', verifyToken, async (req, res) => {
     }
 });
 
-router.put('/update/:document/:userId', verifyToken, async (req, res) => {
+router.put('/update/:document/:userId', async (req, res) => {
     try {
         const { document, userId } = req.params;
 
@@ -92,7 +95,7 @@ router.put('/update/:document/:userId', verifyToken, async (req, res) => {
     }
 });
 
-router.delete('/delete/:document/:userId', verifyToken, async (req, res) => {
+router.delete('/delete/:document/:userId', async (req, res) => {
     try {
         const { document, userId } = req.params;
 
@@ -112,4 +115,4 @@ router.delete('/delete/:document/:userId', verifyToken, async (req, res) => {
     }
 });
 
-module.exports = router;
+export default router;
