@@ -23,14 +23,14 @@ const router = express.Router();
 
 // ROUTES ---------------------------------------------------------------------------
 
-router.post('/upload/:document/:userId', upload.single('file'), async (req, res) => {
+router.post('/upload/:document/:userId', upload.array('files'), async (req, res) => {
     try {
         const { document, userId } = req.params;
 
         // Retrieve and check file
-        const file = req.file;
-        if (!file) {
-            return res.status(400).json({ message: "No file uploaded." });
+        const files = req.files;
+        if (!files) {
+            return res.status(400).json({ message: "No file(s) uploaded." });
         }
 
         const convertedFile = convertToPDF(file);
@@ -78,9 +78,15 @@ router.get('/get/:document/:userId', async (req, res) => {
     }
 });
 
-router.put('/update/:document/:userId', async (req, res) => {
+router.put('/update/:document/:userId', upload.array('files'), async (req, res) => {
     try {
         const { document, userId } = req.params;
+
+        // Retrieve and check file
+        const files = req.files;
+        if (!files) {
+            return res.status(400).json({ message: "No file(s) uploaded." });
+        }
 
         // TODO: GET CURRENT DOCUMENT KEY USING FIREBASE
         const deleteCommand = new DeleteObjectCommand({
@@ -90,15 +96,14 @@ router.put('/update/:document/:userId', async (req, res) => {
 
         await s3.send(deleteCommand);
 
-        // Change later to read from React Native image upload library
-        const fileStream = fs.createReadStream(filePath);
+        const convertedFile = convertToPDF(files);
 
         const key = `user_uploads/${userId}/${document}.pdf`;
         
         const uploadCommand = new PutObjectCommand({
             Bucket: process.env.AWS_S3_BUCKET_NAME,
             Key: key,
-            Body: fileStream,
+            Body: convertedFile,
             ContentType: "application/pdf",
             ServerSideEncryption: "aws:kms", // SSE-KMS
             SSEKMSKeyId: process.env.AWS_KMS_KEY_ARN,
