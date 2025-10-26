@@ -29,6 +29,7 @@ router.post('/upload/:document/:userId', upload.array('files'), async (req, res)
 
         // Retrieve and check file
         const files = req.files;
+        
         if (!files) {
             return res.status(400).json({ message: "No file(s) uploaded." });
         }
