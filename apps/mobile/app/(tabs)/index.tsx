@@ -1,16 +1,5 @@
-import {
-    auth,
-    createUserWithEmailAndPassword,
-    db,
-    doc,
-    getDoc,
-    GoogleAuthProvider,
-    onAuthStateChanged,
-    setDoc,
-    signInWithCredential,
-    signInWithEmailAndPassword,
-} from '@/firebase.config';
 import * as Google from 'expo-auth-session/providers/google';
+import Constants from 'expo-constants';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as WebBrowser from 'expo-web-browser';
@@ -44,7 +33,39 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+// Firebase imports
+import { initializeApp } from 'firebase/app';
+import {
+    createUserWithEmailAndPassword,
+    getAuth,
+    GoogleAuthProvider,
+    onAuthStateChanged,
+    signInWithCredential,
+    signInWithEmailAndPassword
+} from 'firebase/auth';
+import {
+    doc,
+    getDoc,
+    getFirestore,
+    setDoc
+} from 'firebase/firestore';
+
 WebBrowser.maybeCompleteAuthSession();
+
+// Initialize Firebase
+const extra = Constants.expoConfig?.extra ?? {};
+const firebaseConfig = {
+  apiKey: extra.firebaseApiKey,
+  authDomain: extra.firebaseAuthDomain,
+  projectId: extra.firebaseProjectId,
+  storageBucket: extra.firebaseStorageBucket,
+  messagingSenderId: extra.firebaseMessagingSenderId,
+  appId: extra.firebaseAppId,
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
 
 interface UserData {
   firstName: string;
@@ -197,9 +218,23 @@ export default function HomeTab() {
   const [additionalFiles, setAdditionalFiles] = useState<string[]>([]);
 
   // Google Sign In Configuration
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com', // Replace with your actual client ID
+  const redirectUri = 'https://auth.expo.io/@markrgarcia/PaperTrail';
+
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    clientId: extra.webClientId,
+    redirectUri: redirectUri,
+    responseType: 'id_token',
+    scopes: ['openid', 'profile', 'email'],
   });
+
+  // Debug: Log the redirect URI (remove this after testing)
+  useEffect(() => {
+    console.log('=== AUTH SETUP ===');
+    console.log('Redirect URI:', redirectUri);
+    console.log('Web Client ID:', extra.webClientId);
+    console.log('Request ready:', !!request);
+    console.log('Response:', JSON.stringify(response, null, 2));
+  }, [response, request]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -219,18 +254,32 @@ export default function HomeTab() {
   }, []);
 
   useEffect(() => {
+    console.log('🔔 Response changed:', response?.type);
     if (response?.type === 'success') {
+      console.log('✅ Google auth success! Full response:', JSON.stringify(response, null, 2));
+      console.log('📦 Response params:', response.params);
       const { id_token } = response.params;
-      const credential = GoogleAuthProvider.credential(id_token);
-      handleGoogleSignIn(credential);
+      if (id_token) {
+        console.log('🎫 ID Token received, length:', id_token.length);
+        const credential = GoogleAuthProvider.credential(id_token);
+        handleGoogleSignIn(credential);
+      } else {
+        console.error('❌ No id_token in response params:', response.params);
+        Alert.alert('Error', 'No ID token received from Google');
+      }
+    } else if (response?.type === 'error') {
+      console.error('❌ Google auth error:', response.error);
+      Alert.alert('Error', `Google sign-in failed: ${response.error}`);
+    } else if (response?.type === 'cancel') {
+      console.log('🚫 Google auth cancelled');
     }
   }, [response]);
 
   const loadUserProfile = async (userId: string) => {
     try {
-      const userDocPath = doc(db, 'users', userId);
-      const userDoc = await getDoc(userDocPath);
-      if (userDoc.exists && userDoc.exists()) {
+      const userDocRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userDocRef);
+      if (userDoc.exists()) {
         const data = userDoc.data();
         setUserData(data as UserData);
         setHasProfile(true);
@@ -238,9 +287,9 @@ export default function HomeTab() {
         setHasProfile(false);
       }
 
-      const progressDocPath = doc(db, 'users', userId, 'documents', 'progress');
-      const progressDoc = await getDoc(progressDocPath);
-      if (progressDoc.exists && progressDoc.exists()) {
+      const progressDocRef = doc(db, 'users', userId, 'documents', 'progress');
+      const progressDoc = await getDoc(progressDocRef);
+      if (progressDoc.exists()) {
         setDocumentProgress(progressDoc.data() as DocumentProgress);
       }
     } catch (error) {
@@ -298,16 +347,21 @@ export default function HomeTab() {
   const handleGoogleSignIn = async (credential: any) => {
     try {
       setIsLoading(true);
+      console.log('Attempting Firebase signInWithCredential...');
       const userCredential = await signInWithCredential(auth, credential);
+      console.log('Sign in successful!', userCredential.user.email);
       setCurrentUser(userCredential.user);
       
       // Auto-populate email from Google account
       if (userCredential.user.email) {
         setUserData(prev => ({ ...prev, email: userCredential.user.email! }));
       }
+      Alert.alert('Success', 'Signed in with Google!');
     } catch (error: any) {
       console.error('Google sign in error:', error);
-      Alert.alert('Sign In Failed', error.message);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
+      Alert.alert('Sign In Failed', `Error: ${error.message || 'Unknown error'}`);
     } finally {
       setIsLoading(false);
     }
@@ -322,8 +376,8 @@ export default function HomeTab() {
     if (!currentUser) return;
 
     try {
-      const docPath = doc(db, 'users', currentUser.uid);
-      await setDoc(docPath, userData);
+      const userDocRef = doc(db, 'users', currentUser.uid);
+      await setDoc(userDocRef, userData);
       setHasProfile(true);
       Alert.alert('Success', 'Profile created successfully!');
     } catch (error) {
@@ -360,8 +414,8 @@ export default function HomeTab() {
     };
     
     try {
-      const progressPath = doc(db, 'users', currentUser.uid, 'documents', 'progress');
-      await setDoc(progressPath, newProgress);
+      const progressDocRef = doc(db, 'users', currentUser.uid, 'documents', 'progress');
+      await setDoc(progressDocRef, newProgress);
       setDocumentProgress(newProgress);
       Alert.alert(
         'Request Submitted',
@@ -471,8 +525,8 @@ export default function HomeTab() {
     };
 
     try {
-      const progressPath = doc(db, 'users', currentUser.uid, 'documents', 'progress');
-      await setDoc(progressPath, newProgress);
+      const progressDocRef = doc(db, 'users', currentUser.uid, 'documents', 'progress');
+      await setDoc(progressDocRef, newProgress);
       setDocumentProgress(newProgress);
       setShowUploadModal(false);
       Alert.alert('Success', `${selectedDocument.title} has been uploaded successfully!`);
@@ -598,7 +652,12 @@ export default function HomeTab() {
 
             <TouchableOpacity
               style={styles.googleButton}
-              onPress={() => promptAsync()}
+              onPress={() => {
+                console.log('Google button pressed');
+                console.log('Request object:', request);
+                console.log('Redirect URI:', redirectUri);
+                promptAsync();
+              }}
               disabled={!request}
             >
               <View style={styles.googleIcon}>
