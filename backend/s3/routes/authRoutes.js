@@ -18,7 +18,7 @@ router.get("/auth/sign-url/:key", async (req, res) => {
         // e.g. check req.user.id matches object owner
 
         const cmd = new GetObjectCommand({
-            Bucket: process.env.S3_BUCKET,
+            Bucket: process.env.AWS_S3_BUCKET_NAME,
             Key: key,
         });
 
