@@ -1,6 +1,19 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+    auth,
+    createUserWithEmailAndPassword,
+    db,
+    doc,
+    getDoc,
+    GoogleAuthProvider,
+    onAuthStateChanged,
+    setDoc,
+    signInWithCredential,
+    signInWithEmailAndPassword,
+} from '@/firebase.config';
+import * as Google from 'expo-auth-session/providers/google';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
+import * as WebBrowser from 'expo-web-browser';
 import {
     Camera,
     Check,
@@ -11,8 +24,10 @@ import {
     File,
     FileQuestion,
     FileText,
+    Lock,
+    Mail,
     Upload,
-    X
+    X,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
@@ -28,6 +43,8 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+WebBrowser.maybeCompleteAuthSession();
 
 interface UserData {
   firstName: string;
@@ -85,11 +102,82 @@ const DOCUMENT_TYPES = [
     estimatedTime: '6-8 weeks',
     requiresBothSides: false,
   },
+  {
+    id: 'medical_records',
+    title: 'Medical Records',
+    description: 'Upload health records',
+    icon: FileText,
+    estimatedTime: '1-2 weeks',
+    requiresBothSides: false,
+  },
+  {
+    id: 'insurance_card',
+    title: 'Insurance Card',
+    description: 'Health insurance information',
+    icon: CreditCard,
+    estimatedTime: '1-2 weeks',
+    requiresBothSides: true,
+  },
+  {
+    id: 'disability_determination',
+    title: 'Disability Determination',
+    description: 'SSA disability decision letter',
+    icon: FileText,
+    estimatedTime: '4-6 weeks',
+    requiresBothSides: false,
+  },
+  {
+    id: 'medicaid_card',
+    title: 'Medicaid Card',
+    description: 'State Medicaid benefits card',
+    icon: CreditCard,
+    estimatedTime: '2-3 weeks',
+    requiresBothSides: true,
+  },
+  {
+    id: 'veterans_id',
+    title: "Veteran's ID",
+    description: 'VA identification card',
+    icon: CreditCard,
+    estimatedTime: '3-4 weeks',
+    requiresBothSides: true,
+  },
+  {
+    id: 'housing_voucher',
+    title: 'Housing Voucher',
+    description: 'Section 8 or housing assistance',
+    icon: FileText,
+    estimatedTime: '2-4 weeks',
+    requiresBothSides: false,
+  },
+  {
+    id: 'snap_benefits',
+    title: 'SNAP/EBT Card',
+    description: 'Food assistance benefits',
+    icon: CreditCard,
+    estimatedTime: '1-2 weeks',
+    requiresBothSides: true,
+  },
+  {
+    id: 'employment_records',
+    title: 'Employment Records',
+    description: 'Work history and pay stubs',
+    icon: FileText,
+    estimatedTime: '1-2 weeks',
+    requiresBothSides: false,
+  },
 ];
 
 export default function HomeTab() {
-  const [isSignedUp, setIsSignedUp] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentUser, setCurrentUser] = useState<any | null>(null);
+  
+  const [hasProfile, setHasProfile] = useState(false);
   const [userData, setUserData] = useState<UserData>({
     firstName: '',
     lastName: '',
@@ -108,41 +196,138 @@ export default function HomeTab() {
   const [backImage, setBackImage] = useState<string | null>(null);
   const [additionalFiles, setAdditionalFiles] = useState<string[]>([]);
 
+  // Google Sign In Configuration
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
+    clientId: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com', // Replace with your actual client ID
+  });
+
   useEffect(() => {
-    loadUserData();
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setCurrentUser(user);
+        setIsAuthenticated(true);
+        await loadUserProfile(user.uid);
+      } else {
+        setCurrentUser(null);
+        setIsAuthenticated(false);
+        setHasProfile(false);
+      }
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const loadUserData = async () => {
-    try {
-      const savedUserData = await AsyncStorage.getItem('userData');
-      const savedProgress = await AsyncStorage.getItem('documentProgress');
+  useEffect(() => {
+    if (response?.type === 'success') {
+      const { id_token } = response.params;
+      const credential = GoogleAuthProvider.credential(id_token);
+      handleGoogleSignIn(credential);
+    }
+  }, [response]);
 
-      if (savedUserData) {
-        setUserData(JSON.parse(savedUserData));
-        setIsSignedUp(true);
+  const loadUserProfile = async (userId: string) => {
+    try {
+      const userDocPath = doc(db, 'users', userId);
+      const userDoc = await getDoc(userDocPath);
+      if (userDoc.exists && userDoc.exists()) {
+        const data = userDoc.data();
+        setUserData(data as UserData);
+        setHasProfile(true);
+      } else {
+        setHasProfile(false);
       }
 
-      if (savedProgress) {
-        setDocumentProgress(JSON.parse(savedProgress));
+      const progressDocPath = doc(db, 'users', userId, 'documents', 'progress');
+      const progressDoc = await getDoc(progressDocPath);
+      if (progressDoc.exists && progressDoc.exists()) {
+        setDocumentProgress(progressDoc.data() as DocumentProgress);
       }
     } catch (error) {
-      console.error('Error loading user data:', error);
+      console.error('Error loading user profile:', error);
+    }
+  };
+
+  const handleEmailSignUp = async () => {
+    if (!email || !password) {
+      Alert.alert('Required Fields', 'Please enter email and password');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      Alert.alert('Password Mismatch', 'Passwords do not match');
+      return;
+    }
+
+    if (password.length < 6) {
+      Alert.alert('Weak Password', 'Password must be at least 6 characters');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      setCurrentUser(userCredential.user);
+      Alert.alert('Success', 'Account created successfully!');
+    } catch (error: any) {
+      console.error('Sign up error:', error);
+      Alert.alert('Sign Up Failed', error.message);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleSignUp = async () => {
+  const handleEmailSignIn = async () => {
+    if (!email || !password) {
+      Alert.alert('Required Fields', 'Please enter email and password');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      setCurrentUser(userCredential.user);
+    } catch (error: any) {
+      console.error('Sign in error:', error);
+      Alert.alert('Sign In Failed', 'Invalid email or password');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async (credential: any) => {
+    try {
+      setIsLoading(true);
+      const userCredential = await signInWithCredential(auth, credential);
+      setCurrentUser(userCredential.user);
+      
+      // Auto-populate email from Google account
+      if (userCredential.user.email) {
+        setUserData(prev => ({ ...prev, email: userCredential.user.email! }));
+      }
+    } catch (error: any) {
+      console.error('Google sign in error:', error);
+      Alert.alert('Sign In Failed', error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCreateProfile = async () => {
     if (!userData.firstName || !userData.lastName || !userData.email) {
       Alert.alert('Required Fields', 'Please fill in at least your name and email');
       return;
     }
 
+    if (!currentUser) return;
+
     try {
-      await AsyncStorage.setItem('userData', JSON.stringify(userData));
-      setIsSignedUp(true);
+      const docPath = doc(db, 'users', currentUser.uid);
+      await setDoc(docPath, userData);
+      setHasProfile(true);
+      Alert.alert('Success', 'Profile created successfully!');
     } catch (error) {
-      console.error('Error saving user data:', error);
+      console.error('Error saving profile:', error);
       Alert.alert('Error', 'Failed to save your information. Please try again.');
     }
   };
@@ -163,6 +348,8 @@ export default function HomeTab() {
   const handleRequestReplacement = async () => {
     setShowActionModal(false);
     
+    if (!currentUser) return;
+
     const newProgress = {
       ...documentProgress,
       [selectedDocument.id]: {
@@ -173,7 +360,8 @@ export default function HomeTab() {
     };
     
     try {
-      await AsyncStorage.setItem('documentProgress', JSON.stringify(newProgress));
+      const progressPath = doc(db, 'users', currentUser.uid, 'documents', 'progress');
+      await setDoc(progressPath, newProgress);
       setDocumentProgress(newProgress);
       Alert.alert(
         'Request Submitted',
@@ -267,6 +455,8 @@ export default function HomeTab() {
       return;
     }
 
+    if (!currentUser) return;
+
     const newProgress = {
       ...documentProgress,
       [selectedDocument.id]: {
@@ -281,7 +471,8 @@ export default function HomeTab() {
     };
 
     try {
-      await AsyncStorage.setItem('documentProgress', JSON.stringify(newProgress));
+      const progressPath = doc(db, 'users', currentUser.uid, 'documents', 'progress');
+      await setDoc(progressPath, newProgress);
       setDocumentProgress(newProgress);
       setShowUploadModal(false);
       Alert.alert('Success', `${selectedDocument.title} has been uploaded successfully!`);
@@ -327,14 +518,120 @@ export default function HomeTab() {
     );
   }
 
-  if (!isSignedUp) {
+  // Authentication Screen
+  if (!isAuthenticated) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+          <View style={styles.authHeader}>
+            <Text style={styles.authTitle}>Welcome to DocuTrack</Text>
+            <Text style={styles.authSubtitle}>
+              {authMode === 'signin' 
+                ? 'Sign in to access your documents' 
+                : 'Create an account to get started'}
+            </Text>
+          </View>
+
+          <View style={styles.authForm}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Email</Text>
+              <View style={styles.inputWithIcon}>
+                <Mail size={20} color="#6b7280" />
+                <TextInput
+                  style={styles.inputField}
+                  value={email}
+                  onChangeText={setEmail}
+                  placeholder="your@email.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  placeholderTextColor="#9ca3af"
+                />
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.inputWithIcon}>
+                <Lock size={20} color="#6b7280" />
+                <TextInput
+                  style={styles.inputField}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="••••••••"
+                  secureTextEntry
+                  placeholderTextColor="#9ca3af"
+                />
+              </View>
+            </View>
+
+            {authMode === 'signup' && (
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Confirm Password</Text>
+                <View style={styles.inputWithIcon}>
+                  <Lock size={20} color="#6b7280" />
+                  <TextInput
+                    style={styles.inputField}
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    placeholder="••••••••"
+                    secureTextEntry
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.primaryButton}
+              onPress={authMode === 'signin' ? handleEmailSignIn : handleEmailSignUp}
+            >
+              <Text style={styles.primaryButtonText}>
+                {authMode === 'signin' ? 'Sign In' : 'Create Account'}
+              </Text>
+            </TouchableOpacity>
+
+            <View style={styles.divider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            <TouchableOpacity
+              style={styles.googleButton}
+              onPress={() => promptAsync()}
+              disabled={!request}
+            >
+              <View style={styles.googleIcon}>
+                <Text style={styles.googleIconText}>G</Text>
+              </View>
+              <Text style={styles.googleButtonText}>Continue with Google</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.switchModeButton}
+              onPress={() => setAuthMode(authMode === 'signin' ? 'signup' : 'signin')}
+            >
+              <Text style={styles.switchModeText}>
+                {authMode === 'signin' 
+                  ? "Don't have an account? Sign Up" 
+                  : 'Already have an account? Sign In'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // Profile Setup Screen
+  if (!hasProfile) {
     return (
       <SafeAreaView style={styles.container}>
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
           <View style={styles.header}>
-            <Text style={styles.title}>Welcome to DocuTrack</Text>
+            <Text style={styles.title}>Complete Your Profile</Text>
             <Text style={styles.subtitle}>
-              Let's get started by setting up your profile
+              Let's set up your information to get started
             </Text>
           </View>
 
@@ -436,8 +733,8 @@ export default function HomeTab() {
               </View>
             </View>
 
-            <TouchableOpacity style={styles.signUpButton} onPress={handleSignUp}>
-              <Text style={styles.signUpButtonText}>Get Started</Text>
+            <TouchableOpacity style={styles.signUpButton} onPress={handleCreateProfile}>
+              <Text style={styles.signUpButtonText}>Complete Profile</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -445,6 +742,7 @@ export default function HomeTab() {
     );
   }
 
+  // Main Dashboard
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
@@ -667,6 +965,106 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 20,
     paddingBottom: 100,
+  },
+  authHeader: {
+    marginBottom: 32,
+    alignItems: 'center',
+  },
+  authTitle: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#111827',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  authSubtitle: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
+  },
+  authForm: {
+    gap: 16,
+  },
+  inputWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    gap: 12,
+  },
+  inputField: {
+    flex: 1,
+    padding: 12,
+    fontSize: 16,
+    color: '#111827',
+  },
+  primaryButton: {
+    backgroundColor: '#2563eb',
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  primaryButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 24,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#e5e7eb',
+  },
+  dividerText: {
+    marginHorizontal: 16,
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  googleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    padding: 16,
+    borderRadius: 8,
+    gap: 12,
+  },
+  googleIcon: {
+    width: 24,
+    height: 24,
+    backgroundColor: '#4285f4',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  googleIconText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  googleButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#111827',
+  },
+  switchModeButton: {
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  switchModeText: {
+    fontSize: 14,
+    color: '#2563eb',
+    fontWeight: '500',
   },
   header: {
     marginBottom: 24,
