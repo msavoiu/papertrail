@@ -7,6 +7,16 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
   anchor: '(tabs)',
+  initialRouteName: '(tabs)',
+  screens: {
+    '(tabs)': {
+      screens: {
+        index: 'home',
+        vault: 'vault',
+        settings: 'settings'
+      }
+    }
+  }
 };
 
 export default function RootLayout() {

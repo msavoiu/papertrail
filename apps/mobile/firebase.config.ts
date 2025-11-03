@@ -1,7 +1,14 @@
+// firebase.ts
 import Constants from 'expo-constants';
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { 
+  getFirestore, 
+  initializeFirestore, 
+  persistentLocalCache,
+  enableIndexedDbPersistence
+} from 'firebase/firestore';
+import { getFunctions } from 'firebase/functions';
 
 const extra = Constants.expoConfig?.extra ?? {};
 
@@ -14,7 +21,17 @@ const firebaseConfig = {
   appId: extra.firebaseAppId,
 };
 
-const app = initializeApp(firebaseConfig);
+// Initialize Firebase app
+export const app = initializeApp(firebaseConfig);
+
+// Initialize Firestore with persistence for React Native
+initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    cacheSizeBytes: 100000000
+  })
+});
+
+// Export Firebase services
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export default app;
+export const functions = getFunctions(app, 'us-west2');

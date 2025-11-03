@@ -3,18 +3,18 @@ import 'dotenv/config';
 export default {
   expo: {
     name: "PaperTrail",
-    slug: "PaperTrail",
-    owner: "markrgarcia",
+    slug: "papertrail",
     version: "1.0.0",
     orientation: "portrait",
     icon: "./assets/images/icon.png",
-    scheme: "app",
+    scheme: "papertrail",
     userInterfaceStyle: "automatic",
-    newArchEnabled: true,
     ios: {
+      "bundleIdentifier": "com.markrgarcia.PaperTrail",
       supportsTablet: true
     },
     android: {
+      "package": "com.markrgarcia.PaperTrail",
       adaptiveIcon: {
         backgroundColor: "#E6F4FE",
         foregroundImage: "./assets/images/android-icon-foreground.png",

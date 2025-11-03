@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+    AlertCircle,
     Bell,
     ChevronRight,
     Edit2,
@@ -12,6 +13,7 @@ import {
     Phone,
     Save,
     User,
+    WifiOff,
     X,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
@@ -26,6 +28,12 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { auth, db, functions } from '../../firebase.config';
+import { useFirebaseConnection } from '../../hooks/use-firebase-connection';
+import { ThemedView } from '../../components/themed-view';
 
 interface UserData {
   firstName: string;
@@ -46,9 +54,11 @@ interface NotificationSettings {
 }
 
 export default function Settings() {
+  const { isOnline } = useFirebaseConnection();
   const [userData, setUserData] = useState<UserData | null>(null);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editedData, setEditedData] = useState<UserData | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<NotificationSettings>({
     pushNotifications: true,
     emailNotifications: true,
@@ -56,28 +66,75 @@ export default function Settings() {
     securityAlerts: true,
   });
 
+  // Check for pending changes when coming back online
   useEffect(() => {
-    loadSettings();
-  }, []);
-
-  const loadSettings = async () => {
-    try {
-      const savedUserData = await AsyncStorage.getItem('userData');
-      const savedNotifications = await AsyncStorage.getItem('notificationSettings');
-
-      if (savedUserData) {
-        const data = JSON.parse(savedUserData);
-        setUserData(data);
-        setEditedData(data);
-      }
-
-      if (savedNotifications) {
-        setNotifications(JSON.parse(savedNotifications));
-      }
-    } catch (error) {
-      console.error('Error loading settings:', error);
+    if (isOnline && userData) {
+      AsyncStorage.getItem('pendingProfileChanges')
+        .then(async (pending) => {
+          if (pending) {
+            const pendingChanges = JSON.parse(pending);
+            const updateFn = httpsCallable(functions, 'updateUserProfile');
+            try {
+              await updateFn(pendingChanges);
+              await AsyncStorage.removeItem('pendingProfileChanges');
+              Alert.alert('Success', 'Pending changes synced successfully');
+            } catch (error: any) {
+              console.error('Error syncing pending changes:', error);
+              // Keep the pending changes for next attempt
+            }
+          }
+        })
+        .catch(() => {});
     }
-  };
+  }, [isOnline, userData]);
+
+  useEffect(() => {
+    // Listen for auth state and then attach Firestore listeners for the user
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        setUserData(null);
+        setEditedData(null);
+        return;
+      }
+
+      const uid = user.uid;
+      const userDocRef = doc(db, 'users', uid);
+
+      // Try to load cached data first
+      AsyncStorage.getItem('userData')
+        .then((cached) => {
+          if (cached) {
+            const data = JSON.parse(cached) as UserData;
+            setUserData(data);
+            setEditedData(data);
+          }
+        })
+        .catch(() => {});
+
+      const unsubProfile = onSnapshot(userDocRef, (snap) => {
+        setError(null);
+        if (snap.exists()) {
+          const data = snap.data() as UserData;
+          setUserData(data);
+          setEditedData(data);
+          AsyncStorage.setItem('userData', JSON.stringify(data)).catch(() => {});
+        } else {
+          setUserData(null);
+          setEditedData(null);
+        }
+      }, (err) => {
+        console.error('Settings profile onSnapshot error:', err);
+        setError(err.message);
+      });
+
+      // cleanup when auth changes
+      return () => {
+        unsubProfile();
+      };
+    });
+
+    return () => unsubAuth();
+  }, []);
 
   const handleSaveProfile = async () => {
     if (!editedData?.firstName || !editedData?.lastName || !editedData?.email) {
@@ -85,14 +142,57 @@ export default function Settings() {
       return;
     }
 
+    if (!isOnline) {
+      Alert.alert(
+        'Offline Mode',
+        'You are currently offline. Changes will be saved locally and synced when you\'re back online.',
+        [
+          { 
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'Save Locally',
+            onPress: async () => {
+              try {
+                await AsyncStorage.setItem('pendingProfileChanges', JSON.stringify(editedData));
+                setUserData(editedData);
+                setIsEditingProfile(false);
+                Alert.alert('Success', 'Changes saved locally and will sync when online');
+              } catch (error) {
+                console.error('Error saving locally:', error);
+                Alert.alert('Error', 'Failed to save changes locally');
+              }
+            }
+          }
+        ]
+      );
+      return;
+    }
+
     try {
-      await AsyncStorage.setItem('userData', JSON.stringify(editedData));
-      setUserData(editedData);
+      // Call server-side callable to validate and save profile
+      const updateFn = httpsCallable(functions, 'updateUserProfile');
+      await updateFn({
+        firstName: editedData.firstName,
+        lastName: editedData.lastName,
+        email: editedData.email,
+        phone: editedData.phone,
+        address: editedData.address,
+        city: editedData.city,
+        state: editedData.state,
+        zipCode: editedData.zipCode,
+      });
+
+      // Clear any pending changes
+      await AsyncStorage.removeItem('pendingProfileChanges');
+
+      // UI will update from Firestore onSnapshot; provide immediate feedback
       setIsEditingProfile(false);
       Alert.alert('Success', 'Profile updated successfully');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving profile:', error);
-      Alert.alert('Error', 'Failed to save profile. Please try again.');
+      Alert.alert('Error', error?.message || 'Failed to save profile. Please try again.');
     }
   };
 
@@ -177,6 +277,18 @@ export default function Settings() {
 
   return (
     <SafeAreaView style={styles.container}>
+      {!isOnline && (
+        <ThemedView style={styles.offlineBar}>
+          <WifiOff size={16} color="#fff" />
+          <Text style={styles.offlineText}>You're offline - some features may be limited</Text>
+        </ThemedView>
+      )}
+      {error && (
+        <ThemedView style={styles.errorBar}>
+          <AlertCircle size={16} color="#fff" />
+          <Text style={styles.errorText}>{error}</Text>
+        </ThemedView>
+      )}
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {/* Header */}
         <View style={styles.header}>
@@ -474,6 +586,30 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f9fafb',
+  },
+  offlineBar: {
+    backgroundColor: '#f59e0b',
+    padding: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  offlineText: {
+    color: '#fff',
+    fontSize: 14,
+  },
+  errorBar: {
+    backgroundColor: '#ef4444',
+    padding: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  errorText: {
+    color: '#fff',
+    fontSize: 14,
   },
   scrollView: {
     flex: 1,

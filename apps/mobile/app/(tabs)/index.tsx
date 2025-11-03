@@ -18,6 +18,7 @@ import {
     Upload,
     X,
 } from 'lucide-react-native';
+import { signOut } from 'firebase/auth';
 import { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
@@ -43,29 +44,19 @@ import {
     signInWithCredential,
     signInWithEmailAndPassword
 } from 'firebase/auth';
+import { httpsCallable, getFunctions } from 'firebase/functions';
 import {
     doc,
     getDoc,
     getFirestore,
-    setDoc
+    setDoc,
+    updateDoc
 } from 'firebase/firestore';
 
 WebBrowser.maybeCompleteAuthSession();
 
-// Initialize Firebase
-const extra = Constants.expoConfig?.extra ?? {};
-const firebaseConfig = {
-  apiKey: extra.firebaseApiKey,
-  authDomain: extra.firebaseAuthDomain,
-  projectId: extra.firebaseProjectId,
-  storageBucket: extra.firebaseStorageBucket,
-  messagingSenderId: extra.firebaseMessagingSenderId,
-  appId: extra.firebaseAppId,
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// Import Firebase instances from config
+import { auth, db, functions } from '../../firebase.config';
 
 interface UserData {
   firstName: string;
@@ -197,7 +188,6 @@ export default function HomeTab() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [currentUser, setCurrentUser] = useState<any | null>(null);
-  
   const [hasProfile, setHasProfile] = useState(false);
   const [userData, setUserData] = useState<UserData>({
     firstName: '',
@@ -221,7 +211,7 @@ export default function HomeTab() {
   const redirectUri = 'https://auth.expo.io/@markrgarcia/PaperTrail';
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: extra.webClientId,
+    clientId: Constants.expoConfig?.extra?.webClientId,
     redirectUri: redirectUri,
     responseType: 'id_token',
     scopes: ['openid', 'profile', 'email'],
@@ -231,23 +221,28 @@ export default function HomeTab() {
   useEffect(() => {
     console.log('=== AUTH SETUP ===');
     console.log('Redirect URI:', redirectUri);
-    console.log('Web Client ID:', extra.webClientId);
+    console.log('Web Client ID:', Constants.expoConfig?.extra?.webClientId);
     console.log('Request ready:', !!request);
     console.log('Response:', JSON.stringify(response, null, 2));
   }, [response, request]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        setCurrentUser(user);
-        setIsAuthenticated(true);
-        await loadUserProfile(user.uid);
-      } else {
-        setCurrentUser(null);
-        setIsAuthenticated(false);
-        setHasProfile(false);
+      try {
+        if (user) {
+          setCurrentUser(user);
+          setIsAuthenticated(true);
+          await loadUserProfile(user.uid);
+        } else {
+          setCurrentUser(null);
+          setIsAuthenticated(false);
+          setHasProfile(false);
+        }
+      } catch (error) {
+        console.error('Error during auth state change:', error);
+      } finally {
+        setIsLoading(false);
       }
-      setIsLoading(false);
     });
 
     return () => unsubscribe();
@@ -276,6 +271,7 @@ export default function HomeTab() {
   }, [response]);
 
   const loadUserProfile = async (userId: string) => {
+    setIsLoading(true);
     try {
       const userDocRef = doc(db, 'users', userId);
       const userDoc = await getDoc(userDocRef);
@@ -294,6 +290,7 @@ export default function HomeTab() {
       }
     } catch (error) {
       console.error('Error loading user profile:', error);
+      Alert.alert('Error', 'Failed to load profile data. Please try again.');
     }
   };
 
@@ -396,7 +393,73 @@ export default function HomeTab() {
     setFrontImage(null);
     setBackImage(null);
     setAdditionalFiles([]);
-    setTimeout(() => setShowUploadModal(true), 300);
+    setShowUploadModal(true);
+  };
+
+  const handleFileUpload = async () => {
+    try {
+      const options = {
+        type: ['application/pdf', 'image/*'],
+        copyToCacheDirectory: true,
+      };
+      const result = await DocumentPicker.getDocumentAsync(options);
+      if (result.canceled) {
+        return;
+      }
+
+      const file = result.assets[0];
+      const uri = file.uri;
+      const fileType = file.mimeType || uri.split('.').pop()?.toLowerCase() || '';
+
+      console.log('File selected:', file.name);
+      console.log('File type:', fileType);
+
+      // Convert file to base64
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      const reader = new FileReader();
+      
+      reader.onloadend = async () => {
+        const base64data = (reader.result as string)?.split(',')[1] || '';
+        
+        try {
+          console.log('=== FIREBASE FILE UPLOAD STARTING ===');
+          console.log('Document ID:', selectedDocument?.id);
+          console.log('File type:', fileType);
+          console.log('Base64 length:', base64data.length);
+          
+          // Call the Cloud Function to upload the file
+          const uploadFn = httpsCallable(functions, 'uploadDocument');
+          const uploadResult = await uploadFn({
+            documentId: selectedDocument?.id,
+            fileData: base64data,
+            fileType: fileType,
+            side: 'front',
+            isAdditionalFile: false,
+            fileName: file.name,
+            userId: currentUser?.uid,
+          });
+
+          console.log('=== FIREBASE FILE UPLOAD COMPLETE ===');
+          console.log('Upload result:', JSON.stringify(uploadResult, null, 2));
+
+          // Update local state
+          setFrontImage(uri);
+          Alert.alert('Success', 'Document uploaded successfully');
+        } catch (error: any) {
+          console.error('=== FIREBASE FILE UPLOAD ERROR ===');
+          console.error('Error details:', error);
+          console.error('Error code:', error?.code);
+          console.error('Error message:', error?.message);
+          Alert.alert('Error', error?.message || 'Failed to upload document');
+        }
+      };
+
+      reader.readAsDataURL(blob);
+    } catch (error) {
+      console.error('Document picker error:', error);
+      Alert.alert('Error', 'Failed to select document');
+    }
   };
 
   const handleRequestReplacement = async () => {
@@ -426,56 +489,174 @@ export default function HomeTab() {
     }
   };
 
-  const pickImage = async (side: 'front' | 'back') => {
-    const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
-    
-    if (permissionResult.granted === false) {
-      Alert.alert('Permission Required', 'Camera permission is required to take photos');
-      return;
-    }
+  const handleImagePick = async (mode: 'camera' | 'library', side: 'front' | 'back') => {
+    try {
+      if (mode === 'camera') {
+        const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permissionResult.granted) {
+          Alert.alert('Permission Required', 'Camera permission is required to take photos');
+          return;
+        }
+      }
 
+      const options: ImagePicker.ImagePickerOptions = {
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+        aspect: [4, 3],
+        allowsMultipleSelection: false,
+      };
+
+      let result;
+      try {
+        result = mode === 'camera' 
+          ? await ImagePicker.launchCameraAsync(options)
+          : await ImagePicker.launchImageLibraryAsync(options);
+      } catch (e: any) {
+        console.error(`${mode === 'camera' ? 'Camera' : 'Image picker'} error:`, e);
+        Alert.alert(
+          'Error',
+          e.message || `Failed to ${mode === 'camera' ? 'open camera' : 'pick image'}. Please try again.`
+        );
+        return;
+      }
+
+      if (!result.canceled && result.assets && result.assets[0]) {
+        const imageUri = result.assets[0].uri;
+        
+        // Set image in state immediately for preview
+        if (side === 'front') {
+          setFrontImage(imageUri);
+        } else {
+          setBackImage(imageUri);
+        }
+
+        // Convert image to base64 and upload to Firebase
+        try {
+          console.log(`Converting ${side} image to base64...`);
+          const response = await fetch(imageUri);
+          const blob = await response.blob();
+          
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const base64data = (reader.result as string)?.split(',')[1] || '';
+              console.log(`Base64 data length for ${side}:`, base64data.length);
+              resolve(base64data);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+
+          // Verify authentication
+          if (!currentUser) {
+            throw new Error('User not authenticated');
+          }
+
+          // Upload to Firebase with detailed logging
+          console.log('=== FIREBASE UPLOAD STARTING ===');
+          console.log('Document ID:', selectedDocument?.id);
+          console.log('Side:', side);
+          console.log('File type: image/jpeg');
+          console.log('Base64 length:', base64.length);
+          console.log('User ID:', currentUser.uid);
+          
+          // Get a fresh ID token
+          const idToken = await currentUser.getIdToken(true);
+          console.log('Got fresh ID token');
+          
+          // Initialize the function with auth context
+          const uploadFn = httpsCallable(functions, 'uploadDocument');
+          console.log('Calling uploadDocument function...');
+          
+          const uploadResult = await uploadFn({
+            documentId: selectedDocument?.id,
+            fileData: base64,
+            fileType: 'image/jpeg',
+            side: side,
+            isAdditionalFile: false,
+            userId: currentUser?.uid, // Add user ID to help with debugging
+          });
+
+          console.log('=== FIREBASE UPLOAD COMPLETE ===');
+          console.log('Upload result:', JSON.stringify(uploadResult, null, 2));
+          
+          Alert.alert('Success', `${side === 'front' ? 'Front' : 'Back'} image uploaded successfully`);
+        } catch (uploadError: any) {
+          console.error('=== FIREBASE UPLOAD ERROR ===');
+          console.error('Error details:', uploadError);
+          console.error('Error code:', uploadError?.code);
+          
+          // Handle specific error cases
+          if (uploadError.code === 'functions/unauthenticated' || 
+              uploadError.message?.includes('not authenticated')) {
+            Alert.alert(
+              'Authentication Error',
+              'Your session has expired. Please sign out and sign in again to continue.',
+              [
+                {
+                  text: 'Sign Out',
+                  onPress: async () => {
+                    try {
+                      await signOut(auth);
+                      // Navigation logic here if needed
+                    } catch (error) {
+                      console.error('Sign out error:', error);
+                    }
+                  }
+                },
+                {
+                  text: 'Cancel',
+                  style: 'cancel'
+                }
+              ]
+            );
+            return;
+          }
+          console.error('Error message:', uploadError?.message);
+          console.error('Error details:', uploadError?.details);
+          
+          // Remove the image from state since upload failed
+          if (side === 'front') {
+            setFrontImage(null);
+          } else {
+            setBackImage(null);
+          }
+          
+          Alert.alert(
+            'Upload Error',
+            `Failed to upload ${side} image: ${uploadError?.message || 'Unknown error'}. Please try again.`
+          );
+        }
+      }
+    } catch (error: any) {
+      console.error(`Error ${mode === 'camera' ? 'taking photo' : 'picking image'}:`, error);
+      Alert.alert(
+        'Error',
+        error.message || `Failed to ${mode === 'camera' ? 'take photo' : 'pick image'}. Please try again.`
+      );
+    }
+  };
+
+  const pickImage = (side: 'front' | 'back') => {
     Alert.alert(
       'Add Photo',
       'Choose an option',
       [
         {
           text: 'Take Photo',
-          onPress: async () => {
-            const result = await ImagePicker.launchCameraAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
-              allowsEditing: true,
-              quality: 0.8,
-            });
-
-            if (!result.canceled && result.assets[0]) {
-              if (side === 'front') {
-                setFrontImage(result.assets[0].uri);
-              } else {
-                setBackImage(result.assets[0].uri);
-              }
-            }
-          },
+          onPress: () => handleImagePick('camera', side)
         },
         {
           text: 'Choose from Library',
-          onPress: async () => {
-            const result = await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
-              allowsEditing: true,
-              quality: 0.8,
-            });
-
-            if (!result.canceled && result.assets[0]) {
-              if (side === 'front') {
-                setFrontImage(result.assets[0].uri);
-              } else {
-                setBackImage(result.assets[0].uri);
-              }
-            }
-          },
+          onPress: () => handleImagePick('library', side)
         },
-        { text: 'Cancel', style: 'cancel' },
-      ]
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        }
+      ],
+      { cancelable: true }
     );
   };
 
@@ -487,10 +668,52 @@ export default function HomeTab() {
       });
 
       if (!result.canceled && result.assets[0]) {
-        setAdditionalFiles([...additionalFiles, result.assets[0].uri]);
+        const file = result.assets[0];
+        const uri = file.uri;
+        const fileType = file.mimeType || uri.split('.').pop()?.toLowerCase() || '';
+
+        // Convert file to base64 and upload
+        try {
+          const response = await fetch(uri);
+          const blob = await response.blob();
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const base64data = (reader.result as string)?.split(',')[1] || '';
+              resolve(base64data);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+
+          // Upload to Firebase
+          console.log('Uploading additional file to Firebase...');
+          const uploadFn = httpsCallable(functions, 'uploadDocument');
+          const uploadResult = await uploadFn({
+            documentId: selectedDocument?.id,
+            fileData: base64,
+            fileType: fileType,
+            side: 'additional',
+            isAdditionalFile: true,
+            fileName: file.name,
+          });
+
+          console.log('Additional file upload result:', uploadResult);
+
+          // Only add to state after successful upload
+          setAdditionalFiles([...additionalFiles, uri]);
+          Alert.alert('Success', 'File uploaded successfully');
+        } catch (uploadError: any) {
+          console.error('Upload error:', uploadError);
+          Alert.alert(
+            'Upload Error',
+            uploadError?.message || 'Failed to upload file. Please try again.'
+          );
+        }
       }
     } catch (error) {
       console.error('Error picking document:', error);
+      Alert.alert('Error', 'Failed to select document');
     }
   };
 
@@ -573,12 +796,12 @@ export default function HomeTab() {
   }
 
   // Authentication Screen
-  if (!isAuthenticated) {
+  if (!isAuthenticated || !currentUser) {
     return (
       <SafeAreaView style={styles.container}>
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
           <View style={styles.authHeader}>
-            <Text style={styles.authTitle}>Welcome to DocuTrack</Text>
+            <Text style={styles.authTitle}>Welcome to PaperTrail!</Text>
             <Text style={styles.authSubtitle}>
               {authMode === 'signin' 
                 ? 'Sign in to access your documents' 
@@ -683,7 +906,7 @@ export default function HomeTab() {
   }
 
   // Profile Setup Screen
-  if (!hasProfile) {
+  if (isAuthenticated && currentUser && !hasProfile) {
     return (
       <SafeAreaView style={styles.container}>
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>

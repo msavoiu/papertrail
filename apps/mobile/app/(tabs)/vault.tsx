@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+    AlertCircle,
     Check,
     Download,
     Edit,
@@ -10,6 +11,7 @@ import {
     Search,
     Share2,
     Shield,
+    WifiOff,
     X,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
@@ -24,6 +26,12 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { auth, db, functions } from '../../firebase.config';
+import { useFirebaseConnection } from '../../hooks/use-firebase-connection';
+import { ThemedView } from '../../components/themed-view';
 
 interface UserData {
   firstName: string;
@@ -55,46 +63,148 @@ interface Document {
   size: string;
 }
 
+type DocTypes = typeof docTypes;
+type DocTypeKeys = keyof DocTypes;
+
+const docTypes = {
+  drivers_license: {
+    name: "Driver's License",
+    requiresBothSides: true,
+  },
+  birth_certificate: {
+    name: 'Birth Certificate',
+    requiresBothSides: false,
+  },
+  social_security: {
+    name: 'Social Security Card',
+    requiresBothSides: false,
+  },
+  passport: {
+    name: 'Passport',
+    requiresBothSides: false,
+  },
+  medical_records: {
+    name: 'Medical Records',
+    requiresBothSides: false,
+  },
+  insurance_card: {
+    name: 'Insurance Card',
+    requiresBothSides: true,
+  },
+} as const;
+
 export default function VaultTab() {
   const [userData, setUserData] = useState<UserData | null>(null);
+  const [editedUserData, setEditedUserData] = useState<UserData | null>(null);
   const [documentProgress, setDocumentProgress] = useState<DocumentProgress>({});
   const [showSensitive, setShowSensitive] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isEditingPersonalInfo, setIsEditingPersonalInfo] = useState(false);
-  const [editedUserData, setEditedUserData] = useState<UserData | null>(null);
+  const [selectedDocumentType, setSelectedDocumentType] = useState<DocTypeKeys | ''>('');
   const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
+  const [isUploadModalVisible, setIsUploadModalVisible] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const { isOnline } = useFirebaseConnection();
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    loadVaultData();
+    // Subscribe to auth state and then listen to Firestore documents for the user
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        setUserData(null);
+        setEditedUserData(null);
+        setDocumentProgress({});
+        return;
+      }
+
+      const uid = user.uid;
+      const userDocRef = doc(db, 'users', uid);
+      const progressDocRef = doc(db, 'users', uid, 'documents', 'progress');
+
+      // Try to load cached data first
+      AsyncStorage.getItem('userData')
+        .then((cached) => {
+          if (cached) {
+            const data = JSON.parse(cached) as UserData;
+            setUserData(data);
+            setEditedUserData(data);
+          }
+        })
+        .catch(() => {});
+
+      const unsubProfile = onSnapshot(userDocRef, (snap) => {
+        setError(null);
+        if (snap.exists()) {
+          const data = snap.data() as UserData;
+          setUserData(data);
+          setEditedUserData(data);
+          // cache for faster startup
+          AsyncStorage.setItem('userData', JSON.stringify(data)).catch(() => {});
+        } else {
+          setUserData(null);
+          setEditedUserData(null);
+        }
+      }, (err) => {
+        console.error('Profile onSnapshot error:', err);
+        setError(err.message);
+      });
+
+      const unsubProgress = onSnapshot(progressDocRef, (snap) => {
+        if (snap.exists()) {
+          const p = snap.data() as DocumentProgress;
+          setDocumentProgress(p);
+          AsyncStorage.setItem('documentProgress', JSON.stringify(p)).catch(() => {});
+        } else {
+          setDocumentProgress({});
+        }
+      }, (err) => {
+        console.error('Progress onSnapshot error:', err);
+      });
+
+      // cleanup snapshots when auth changes
+      return () => {
+        unsubProfile();
+        unsubProgress();
+      };
+    });
+
+    return () => unsubAuth();
   }, []);
-
-  const loadVaultData = async () => {
-    try {
-      const savedUserData = await AsyncStorage.getItem('userData');
-      const savedProgress = await AsyncStorage.getItem('documentProgress');
-
-      if (savedUserData) {
-        const data = JSON.parse(savedUserData);
-        setUserData(data);
-        setEditedUserData(data);
-      }
-
-      if (savedProgress) {
-        setDocumentProgress(JSON.parse(savedProgress));
-      }
-    } catch (error) {
-      console.error('Error loading vault data:', error);
-    }
-  };
 
   const buildDocumentsList = (): Document[] => {
     const docs: Document[] = [];
-    const docNames: Record<string, string> = {
-      drivers_license: "Driver's License",
-      birth_certificate: 'Birth Certificate',
-      social_security: 'Social Security Card',
-      passport: 'Passport',
+    const docTypes = {
+      drivers_license: {
+        name: "Driver's License",
+        requiresBothSides: true,
+      },
+      birth_certificate: {
+        name: 'Birth Certificate',
+        requiresBothSides: false,
+      },
+      social_security: {
+        name: 'Social Security Card',
+        requiresBothSides: false,
+      },
+      passport: {
+        name: 'Passport',
+        requiresBothSides: false,
+      },
+      medical_records: {
+        name: 'Medical Records',
+        requiresBothSides: false,
+      },
+      insurance_card: {
+        name: 'Insurance Card',
+        requiresBothSides: true,
+      },
     };
+
+    const docNames = Object.fromEntries(
+      Object.entries(docTypes).map(([key, value]) => [key, value.name])
+    );
 
     Object.entries(documentProgress).forEach(([docType, progress]) => {
       if (progress?.status === 'completed') {
@@ -137,6 +247,55 @@ export default function VaultTab() {
   const handleCancelEdit = () => {
     setEditedUserData(userData);
     setIsEditingPersonalInfo(false);
+  };
+
+  const handleDocumentUpload = async (
+    documentId: string,
+    fileData: string,
+    fileType: string,
+    side: 'front' | 'back' = 'front'
+  ) => {
+    if (!isOnline) {
+      Alert.alert(
+        'Offline Mode',
+        'Document upload is not available while offline. Please try again when you have an internet connection.'
+      );
+      return;
+    }
+
+    try {
+      const uploadFn = httpsCallable(functions, 'uploadDocument');
+      const result = await uploadFn({
+        documentId,
+        fileData,
+        fileType,
+        side,
+        isAdditionalFile: false,
+      });
+
+      // Update local progress state
+      const updatedProgress = {
+        ...documentProgress,
+        [documentId]: {
+          status: 'completed' as const,
+          updatedAt: new Date().toISOString(),
+          uploadedFileName: `${documentId}_${side}.${fileType}`,
+        },
+      };
+      
+      setDocumentProgress(updatedProgress);
+      AsyncStorage.setItem('documentProgress', JSON.stringify(updatedProgress)).catch(() => {});
+
+      Alert.alert('Success', 'Document uploaded successfully');
+      return result;
+    } catch (error: any) {
+      console.error('Error uploading document:', error);
+      Alert.alert(
+        'Upload Failed',
+        error?.message || 'Failed to upload document. Please try again.'
+      );
+      throw error;
+    }
   };
 
   const generateDocumentPreview = (doc: Document) => {
@@ -221,6 +380,18 @@ export default function VaultTab() {
 
   return (
     <SafeAreaView style={styles.container}>
+      {!isOnline && (
+        <ThemedView style={styles.offlineBar}>
+          <WifiOff size={16} color="#fff" />
+          <Text style={styles.offlineText}>You're offline - some features may be limited</Text>
+        </ThemedView>
+      )}
+      {error && (
+        <ThemedView style={styles.errorBar}>
+          <AlertCircle size={16} color="#fff" />
+          <Text style={styles.errorText}>{error}</Text>
+        </ThemedView>
+      )}
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {/* Header */}
         <View style={styles.header}>
@@ -436,6 +607,104 @@ export default function VaultTab() {
         </View>
       </ScrollView>
 
+      {/* Upload Document Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isUploadModalVisible}
+        onRequestClose={() => {
+          if (!isUploading) {
+            setIsUploadModalVisible(false);
+            setSelectedDocumentType('');
+            setUploadProgress(0);
+          }
+        }}>
+        <SafeAreaView style={styles.uploadModalContainer}>
+          <View style={styles.uploadModalContent}>
+            <View style={styles.uploadModalHeader}>
+              <Text style={styles.uploadModalTitle}>Upload Document</Text>
+              {!isUploading && (
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={() => {
+                    setIsUploadModalVisible(false);
+                    setSelectedDocumentType('');
+                    setUploadProgress(0);
+                  }}>
+                  <X size={24} color="#000" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <ScrollView style={styles.modalBody}>
+              <Text style={styles.sectionLabel}>Select Document Type</Text>
+              {Object.entries(docTypes).map(([id, { name, requiresBothSides }]) => (
+                <TouchableOpacity
+                  key={id}
+                  style={[
+                    styles.documentTypeButton,
+                    selectedDocumentType === id && styles.documentTypeButtonSelected,
+                  ]}
+                  onPress={() => setSelectedDocumentType(id as DocTypeKeys)}
+                  disabled={isUploading}>
+                  <Text
+                    style={[
+                      styles.documentTypeText,
+                      selectedDocumentType === id && styles.documentTypeTextSelected,
+                    ]}>
+                    {name}
+                    {requiresBothSides ? ' (Front & Back)' : ''}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+
+              {selectedDocumentType && (
+                <View style={styles.uploadSection}>
+                  <Text style={styles.sectionLabel}>Upload Files</Text>
+                  {docTypes[selectedDocumentType]?.requiresBothSides ? (
+                    <>
+                      <TouchableOpacity
+                        style={styles.uploadButton}
+                        onPress={() => {/* TODO: Handle front side upload */}}
+                        disabled={isUploading}>
+                        <FileText size={24} color="#2563eb" />
+                        <Text style={styles.uploadButtonText}>Select Front Side</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.uploadButton}
+                        onPress={() => {/* TODO: Handle back side upload */}}
+                        disabled={isUploading}>
+                        <FileText size={24} color="#2563eb" />
+                        <Text style={styles.uploadButtonText}>Select Back Side</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.uploadButton}
+                      onPress={() => {/* TODO: Handle single side upload */}}
+                      disabled={isUploading}>
+                      <FileText size={24} color="#2563eb" />
+                      <Text style={styles.uploadButtonText}>Select File</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {isUploading && (
+                    <View style={styles.progressContainer}>
+                      <View style={styles.progressBar}>
+                        <View
+                          style={[styles.progressFill, { width: `${uploadProgress}%` }]}
+                        />
+                      </View>
+                      <Text style={styles.progressText}>{uploadProgress}%</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
       {/* Document Preview Modal */}
       <Modal
         visible={!!previewDocument}
@@ -509,6 +778,129 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f9fafb',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  uploadModalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  uploadModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  uploadModalContent: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 20,
+    maxHeight: '80%',
+  },
+  uploadModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
+  modalBody: {
+    padding: 20,
+  },
+  closeButton: {
+    padding: 8,
+  },
+  sectionLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#111827',
+    marginBottom: 12,
+  },
+  documentTypeButton: {
+    backgroundColor: '#f3f4f6',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  documentTypeButtonSelected: {
+    backgroundColor: '#dbeafe',
+    borderWidth: 1,
+    borderColor: '#2563eb',
+  },
+  documentTypeText: {
+    fontSize: 16,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  documentTypeTextSelected: {
+    color: '#2563eb',
+  },
+  uploadSection: {
+    marginTop: 24,
+  },
+  uploadButton: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderStyle: 'dashed',
+  },
+  uploadButtonText: {
+    fontSize: 16,
+    color: '#2563eb',
+    fontWeight: '500',
+  },
+  progressContainer: {
+    marginTop: 16,
+  },
+  progressBar: {
+    height: 4,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#2563eb',
+  },
+  progressText: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+  },
+  offlineBar: {
+    backgroundColor: '#f59e0b',
+    padding: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  offlineText: {
+    color: '#fff',
+    fontSize: 14,
+  },
+  errorBar: {
+    backgroundColor: '#ef4444',
+    padding: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  errorText: {
+    color: '#fff',
+    fontSize: 14,
   },
   scrollView: {
     flex: 1,
@@ -853,11 +1245,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#111827',
-  },
   modalScroll: {
     padding: 20,
   },
@@ -923,5 +1310,43 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center'
+  },
+  modalButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  modalButtonPrimary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#2563eb',
+    padding: 12,
+    borderRadius: 8,
+  },
+  modalButtonTextPrimary: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  emptyStateTitle: {
+    marginTop: 12,
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  emptyStateText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
   },
 });
