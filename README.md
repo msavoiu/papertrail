@@ -1,117 +1,78 @@
-# 🧾 PaperTrail
+# PaperTrail
 
-**Secure, guided document recovery for individuals experiencing homelessness.**
+[![Devpost video](http://img.youtube.com/vi/A3x4ZLDtCKY/maxresdefault.jpg)](https://www.youtube.com/watch?v=A3x4ZLDtCKY)
 
----
+## Inspiration
 
-## 🌟 Inspiration
+We were inspired by the critical barrier that lost, stolen, or inaccessible documents create for people experiencing homelessness. The inability to prove one's identity immediately blocks access to shelter, employment, benefits, and housing programs. Our goal was to digitize and streamline the complex document recovery process, turning a bureaucratic hurdle into a clear pathway to stability.
 
-We were inspired by the critical barrier that lost, stolen, or inaccessible documents create for people experiencing homelessness.  
-The inability to prove one’s identity immediately blocks access to shelter, employment, benefits, and housing programs.  
+## What it does
 
-Our goal with **PaperTrail** is to digitize and streamline the complex document recovery process — turning a bureaucratic hurdle into a clear pathway to stability.
+PaperTrail is a secure, guided workflow application that dramatically accelerates document recovery for individuals experiencing homelessness.
 
----
+### Guided Request & PII Status
+Users input PII once. The app then generates a Summary PDF detailing exactly what PII is still missing for any specific application. This process is powered by our Letta chatbot, which guides user input and executes backend logic to determine information gaps.
 
-## 💡 What It Does
+### Fee Waiver Integration
+We integrate the process for receiving state-mandated fee-exempt documents (CA Birth Certificate/ID) by facilitating the signing of the Affidavit of Homeless Status with verified partners.
 
-**PaperTrail** is a secure, guided workflow application that dramatically accelerates document recovery for individuals experiencing homelessness.
+### Secure Partner Sharing
+The app allows users to grant one-click consent to securely share their PII and verified records with a trusted case manager, instantly mobilizing social service support.
 
-### Key Features
+### Digital Vault & Access
+Provides a secure Vault Page to store digital copies, allowing users to preview and download their documents to prove possession on demand.
 
-- **🧭 Guided Request & PII Status**  
-  Users input their Personally Identifiable Information (PII) once.  
-  The app then generates a **Summary PDF** detailing exactly what PII is missing for any specific application.  
-  This process is powered by our **Letta chatbot**, which guides user input and runs backend logic to identify information gaps.
+## How we built it
 
-- **💸 Fee Waiver Integration**  
-  Integrates the process for obtaining **state-mandated fee-exempt documents** (e.g., CA Birth Certificate/ID) by facilitating the signing of the **Affidavit of Homeless Status** with verified partners.
+[![My Skills](https://skillicons.dev/icons?i=js,react,aws,firebase)](https://skillicons.dev)
 
-- **🔐 Secure Partner Sharing**  
-  Users can grant **one-click consent** to securely share their PII and verified records with a trusted case manager — instantly mobilizing social service support.
-
-- **📁 Digital Vault & Access**  
-  A **secure Vault Page** to store and access digital copies of documents, allowing users to preview and download them to prove possession on demand.
-
----
-
-## 🏗️ How We Built It
-
-We focused on building a **secure, user-centric mobile application** using modern development practices.
+We focused on building a secure, user-centric application utilizing modern mobile development practices:
 
 ### Front-End
-- Built with **React Native (Expo)** for rapid mobile development.
-- Designed a **Home Page** for easy request initiation and a **Vault Page** for secure access.
+Developed the mobile application using React Native Expo for rapid development, focusing on the Home Page for easy request initiation and the Vault Page for secure access.
 
-### Back-End & Logic
-- Created a workflow engine where the **Letta chatbot** serves as the intelligent backend logic layer.
-- Guides user interaction, collects required PII, and determines document application status and next steps.
+### Back-End/Logic
+Built a workflow engine where the Letta chatbot agent serves as the core logic layer, guiding user interaction, collecting necessary PII, and running checks to determine document application status and required next steps.
 
 ### Data Structure
-- Database tracks **PII completeness** across **12 target documents**, enabling the Missing PII Summary feature.
+Structured our database to track PII completeness status for all 12 target documents, enabling the Missing PII Summary feature.
 
 ### Security
-- Enforced **PII masking**, **re-authentication** for editing sensitive data (SSN, Address), and **encrypted storage** for the Digital Vault.
+Implemented security protocols including PII masking and re-authentication for editing sensitive data (SSN, Address) and encrypted storage for the Digital Vault.
 
----
+## Challenges we ran into
 
-## ⚙️ Challenges We Ran Into
+### Firebase & Expo Conflict
+A primary technical challenge was overcoming compatibility issues when attempting to integrate our backend services with Firebase while using the constrained React Native Expo environment, which forced us to find alternative authentication and data solutions.
 
-- **Firebase & Expo Conflict**  
-  Integrating backend services with Firebase in the constrained React Native Expo environment caused compatibility issues, leading us to design alternative auth and data solutions.
+### External Form Specificity
+Mapping user input PII accurately across different official documents (like the CA Birth Certificate application vs. the SSA SS-5 form) required painstaking manual logic to ensure the generated Summary PDF was legally viable.
 
-- **External Form Specificity**  
-  Mapping user-provided PII accurately across official documents (e.g., CA Birth Certificate vs. SSA SS-5) required meticulous manual logic to ensure legal compliance.
+### Modeling Partner Policy
+Architecting the app's workflow around complex legal and partnership protocols (like the Affidavit of Homeless Status signature process and the necessary Agency MOU requirements) was a significant non-code challenge.
 
-- **Modeling Partner Policy**  
-  Designing workflows around legal protocols like **Affidavit of Homeless Status** signatures and **Agency MOU requirements** posed complex architectural and non-code challenges.
+## Accomplishments that we're proud of
 
----
+### The Fee Waiver Workflow
+Successfully modeling the end-to-end process for securing a fee-exempt California Birth Certificate, which is the critical first step to getting all other documents.
 
-## 🏆 Accomplishments We’re Proud Of
+### Letta-Powered Logic
+Successfully leveraging our Letta chatbot agent to serve as the intelligent backend, transforming raw user PII into actionable application statuses and guiding the user's document recovery journey.
 
-- **Fee Waiver Workflow**  
-  Successfully modeled the **end-to-end process** for securing a **fee-exempt California Birth Certificate**, a crucial first step in the recovery process.
+### Strong Security Posture
+Implementing robust authentication and encryption protocols, including PII masking and access controls, which is paramount when handling data for vulnerable populations.
 
-- **Letta-Powered Logic**  
-  Leveraged the **Letta chatbot agent** as the intelligent backend — transforming raw PII into actionable insights and guiding users through recovery.
+## What we learned
 
-- **Strong Security Posture**  
-  Implemented robust **authentication**, **encryption**, and **access control** — essential for safeguarding vulnerable users’ data.
+We learned that for social impact technology, the solution lies less in innovative technology and more in digitizing complex policy and regulatory workflows. The biggest barriers for users are not paper forms themselves, but the sequencing, cost, and logistics of compliance—all of which a thoughtful application can solve.
 
----
+## What's next for PaperTrail
 
-## 📚 What We Learned
+### Pilot Program Launch
+Partnering with local service providers to pilot the app's One-Click Consent Sharing feature with a small cohort of case managers.
 
-We learned that in **social impact technology**, the real challenge isn’t technological innovation — it’s **digitizing complex policy and regulatory workflows**.  
+### API Integration for Status
+Develop an API to integrate with partner systems (e.g., Homeless Management Information Systems - HMIS) to automatically update a document's status from "Submitted" to "Arrived."
 
-The biggest barriers are not paper forms themselves, but the **sequencing, cost, and logistics of compliance** — all of which a thoughtful application can streamline.
-
----
-
-## 🚀 What’s Next for PaperTrail
-
-- **🤝 Pilot Program Launch**  
-  Partner with local service providers to pilot **One-Click Consent Sharing** with case managers.
-
-- **🔗 API Integration for Status**  
-  Develop APIs to connect with partner systems (e.g., **HMIS**) and automatically update a document’s status from “Submitted” → “Arrived”.
-
-- **🌎 Expanding State Coverage**  
-  Extend platform intelligence beyond California to incorporate **fee waiver laws** and **document protocols** in neighboring states.
-
----
-
-## 🧠 Built With
-
-- **React Native (Expo)**
-- **Letta AI Chatbot**
-- **Custom Backend Workflow Engine**
-- **Encrypted Storage**
-- **Secure Authentication Protocols**
-
----
-
-## ❤️ Team PaperTrail
-
-A mission-driven project dedicated to restoring identity, access, and dignity through technology.
+### Expanding State Coverage
+Extend the platform's intelligence beyond California to incorporate fee waiver laws and document protocols for neighboring states.
