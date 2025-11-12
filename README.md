@@ -1,5 +1,6 @@
 # PaperTrail
 
+Click the thumbnail to view our video demo!
 [![Devpost video](http://img.youtube.com/vi/A3x4ZLDtCKY/maxresdefault.jpg)](https://www.youtube.com/watch?v=A3x4ZLDtCKY)
 
 ## Inspiration
